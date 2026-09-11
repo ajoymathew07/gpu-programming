@@ -1,0 +1,24 @@
+Put your solution in this directory, named after your roll number:
+
+    <YourRollNumber>.cu        for example:  CS22D003.cu
+
+Upper or lower case are both accepted.
+
+From the assignment folder:
+
+    cp main.cu submit/CS22D003.cu
+
+Then implement compute() inside that copy and run:
+
+    ./scripts/run_tests.sh              (on a machine with an NVIDIA GPU)
+    qsub scripts/aqua_job.cmd           (on the Aqua cluster)
+
+Do NOT leave the file named main.cu -- rename it to your roll number.
+
+To submit, upload <YourRollNumber>.zip on Moodle, containing only your .cu file:
+
+    cd submit
+    zip CS22D003.zip CS22D003.cu
+
+You may delete this text file. It is ignored by the test scripts, which only
+look at *.cu files.
