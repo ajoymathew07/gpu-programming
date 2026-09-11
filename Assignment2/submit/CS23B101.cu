@@ -5,26 +5,24 @@
 #include<cuda.h>
 using namespace std;
 
-#define TILE 32
-
 __global__ void dkernel(const int* A, const int* B, const int* C, const int* D, int* E, int p, int q, int r) {
-	__shared__ int sA[TILE][TILE + 1];
-	__shared__ int sB[TILE][TILE + 1];
-	__shared__ int sC[TILE][TILE + 1];
-	__shared__ int sD[TILE][TILE + 1];
+	__shared__ int sA[32][33];
+	__shared__ int sB[32][33];
+	__shared__ int sC[32][33];
+	__shared__ int sD[32][33];
 
 	int tx = threadIdx.x;
 	int ty = threadIdx.y;
-	int i0 = blockIdx.y * TILE;
-	int j0 = blockIdx.x * TILE;
+	int i0 = blockIdx.y * 32;
+	int j0 = blockIdx.x * 32;
 	int row = i0 + ty;
 	int col = j0 + tx;
 
 	int sum = 0;
-	int numTiles = (q + TILE - 1) / TILE;
+	int numTiles = (q + 32 - 1) / 32;
 
 	for(int t = 0; t < numTiles; ++t) {
-		int t0 = t * TILE;
+		int t0 = t * 32;
 
 		sA[ty][tx] = (t0 + ty < q && i0 + tx < p) ? A[(t0 + ty) * p + (i0 + tx)] : 0;
 		sB[ty][tx] = (t0 + ty < q && j0 + tx < r) ? B[(t0 + ty) * r + (j0 + tx)] : 0;
@@ -32,7 +30,7 @@ __global__ void dkernel(const int* A, const int* B, const int* C, const int* D, 
 		sD[ty][tx] = (j0 + ty < r && t0 + tx < q) ? D[(j0 + ty) * q + (t0 + tx)] : 0;
 		__syncthreads();
 
-		for(int k = 0; k < TILE; ++k) {
+		for(int k = 0; k < 32; ++k) {
 			sum += sA[k][ty] * sB[k][tx];
 			sum += sC[ty][k] * sD[tx][k];
 		}
@@ -66,8 +64,8 @@ void compute(int p, int q, int r, int *h_matrixA, int *h_matrixB,
 	/* ****************************************************************** */
 	/* Write your code here */
 	/* Configure and launch kernels */
-	dim3 block(TILE, TILE);
-	dim3 grid((r + TILE - 1) / TILE, (p + TILE - 1) / TILE);
+	dim3 block(32, 32);
+	dim3 grid((r + block.x - 1) / block.x, (p + block.y - 1) / block.y);
 	dkernel<<<grid, block>>>(d_matrixA, d_matrixB, d_matrixC, d_matrixD, d_matrixE, p, q, r);
 	
 	/* ****************************************************************** */
