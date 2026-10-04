@@ -64,7 +64,7 @@ __global__ void init_source_kernel(int *tent, int* state, int* near_cur, int N, 
     }
 }
 
-__global__ void relax_light_kernel(Graph g, Workspace ws, int delta, int near_size, int cutoff, int light_delta) {
+__global__ void relax_light_kernel(Graph g, Workspace ws, int near_size, int cutoff, int light_delta) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
 
     if(i >= near_size) return;
@@ -110,9 +110,93 @@ __global__ void relax_light_kernel(Graph g, Workspace ws, int delta, int near_si
     }
 }
 
+__global__ void relax_heavy_kernel(Graph g, Workspace ws, int settled_size, int light_delta){
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if(i >= settled_size) return;
+
+    int u = ws.settled[i];
+    int du =  ws.tent[u];
+    int start = g.offsets[u];
+    int end = g.offsets[u + 1];
+
+    for(int e = start; e < end; ++e){
+
+        int w = g.weights[e];
+        if(w <= light_delta) continue;
+
+        int v = g.neighs[e];
+        int nd = du + w;
+
+        if(nd >= ws.tent[v]) continue;
+
+        if(nd < atomicMin(&ws.tent[v], nd)){
+
+            if(atomicCAS(&ws.state[v], STATE_NONE, STATE_FAR) == STATE_NONE){
+                int pos = atomicAdd(&ws.counters[CNT_FAR], 1);
+                ws.far_queue[pos] = v;
+            }
+        }
+    }
+}
+
+__global__ void fill_far_keys_kernel(int* far_queue, int* far_keys, int* tent, int far_size){
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if(i >= far_size) return;
+
+    int v = far_queue[i];
+    far_keys[i] = tent[v];
+}
+
+__global__ void set_state_kernel(int* list, int size, int* state, int val){
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if(i >= size) return;
+
+    int v = list[i];
+    state[v] = val;
+}
+
 // ============================================================================
 // SINGLE SOURCE DELTA-STEPPING DRIVER
 // ============================================================================
+int refill_from_far(Workspace &ws, int far_size, int last_cutoff, int delta_mode, int K, std::ofstream &outfile, int&cutoff, int& light_delta){
+    fill_far_keys_kernel<<<num_blocks(far_size), BLOCK_SIZE>>>(ws.far_queue, ws.far_keys, ws.tent, far_size);
+
+    thrust::device_ptr<int> keys(ws.far_keys);
+    thrust::device_ptr<int> queue(ws.far_queue);
+
+    thrust::sort_by_key(keys, keys + far_size, queue);
+
+    int first = thrust::upper_bound(keys, keys + far_size, last_cutoff) - keys;
+    if(first == far_size){
+        int zero = 0;
+        cudaMemcpy(ws.counters + CNT_FAR, &zero, sizeof(int), cudaMemcpyHostToDevice);
+        return 0;
+    }
+
+    int d_min = keys[first];
+    long long c = (long long) d_min + delta_mode;
+    cutoff = (c > INF) ? INF : (int) c;
+    light_delta = delta_mode;
+
+    int last = thrust::upper_bound(keys, keys + far_size, cutoff) - keys;
+
+    int near_size = last - first;
+    thrust::copy(queue + first, queue + last, thrust::device_ptr<int>(ws.near_cur));
+
+    set_state_kernel<<<num_blocks(near_size), BLOCK_SIZE>>>(ws.near_cur, near_size, ws.state, STATE_NEAR);
+
+    int remaining = far_size - last;
+    thrust::copy(queue + last, queue + far_size, keys);
+    std::swap(ws.far_queue, ws.far_keys);
+    cudaMemcpy(ws.counters + CNT_FAR, &remaining, sizeof(int), cudaMemcpyHostToDevice);
+
+    return near_size;
+
+
+}
 
 void run_delta_stepping_single_source(const Graph& g, Workspace&ws, int source, int delta_mode, int K, std::ofstream& outfile)
 {
@@ -123,17 +207,37 @@ void run_delta_stepping_single_source(const Graph& g, Workspace&ws, int source, 
   int light_delta = (delta_mode >= 0) ? delta_mode : 0;
   int cutoff = light_delta;
 
-  ws.window_id++;
-
   while(near_size > 0){
-    relax_light_kernel<<<num_blocks(near_size), BLOCK_SIZE>>>(g, ws, light_delta, near_size, cutoff, light_delta);
-    cudaMemcpy(&near_size, ws.counters + CNT_NEAR_NEXT, sizeof(int), cudaMemcpyDeviceToHost);
-    cudaMemset(ws.counters + CNT_NEAR_NEXT, 0, sizeof(int));
-    std::swap(ws.near_cur, ws.near_next);
-  }
+    ws.window_id++;
+    cudaMemset(ws.counters + CNT_SETTLED, 0, sizeof(int));
 
+    while(near_size > 0){
+        relax_light_kernel<<<num_blocks(near_size), BLOCK_SIZE>>>(g, ws, near_size, cutoff, light_delta);
+        cudaMemcpy(&near_size, ws.counters + CNT_NEAR_NEXT, sizeof(int), cudaMemcpyDeviceToHost);
+        cudaMemset(ws.counters + CNT_NEAR_NEXT, 0, sizeof(int));
+        std::swap(ws.near_cur, ws.near_next);
+    }
+
+    int settled_size = 0;
+    cudaMemcpy(&settled_size, ws.counters + CNT_SETTLED, sizeof(int), cudaMemcpyDeviceToHost);
+    
+    if(settled_size > 0){
+        relax_heavy_kernel<<<num_blocks(settled_size), BLOCK_SIZE>>>(g, ws, settled_size, light_delta);
+    }
+    int far_size = 0;
+    cudaMemcpy(&far_size, ws.counters + CNT_FAR, sizeof(int), cudaMemcpyDeviceToHost);
+
+    if(far_size == 0) break;
+
+    int last_cutoff = cutoff;
+    near_size = refill_from_far(ws, far_size, last_cutoff, delta_mode, K, outfile, cutoff, light_delta);
+
+    }
   cudaDeviceSynchronize();
+
 }
+
+
 
 // ============================================================================
 // MAIN FUNCTION
