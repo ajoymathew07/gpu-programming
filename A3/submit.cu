@@ -177,9 +177,19 @@ int refill_from_far(Workspace &ws, int far_size, int last_cutoff, int delta_mode
     }
 
     int d_min = keys[first];
-    long long c = (long long) d_min + delta_mode;
-    cutoff = (c > INF) ? INF : (int) c;
-    light_delta = delta_mode;
+    if(delta_mode >= 0){
+
+        long long c = (long long) d_min + delta_mode;
+        cutoff = (c > INF) ? INF : (int) c;
+        light_delta = delta_mode;
+
+    }else{
+        int live = far_size - first;
+        int target = first + min(K-1, live - 1);
+        cutoff = keys[target];
+        outfile<< cutoff - d_min<< "\n";
+        light_delta = max(cutoff - d_min, 1); 
+    }
 
     int last = thrust::upper_bound(keys, keys + far_size, cutoff) - keys;
 
