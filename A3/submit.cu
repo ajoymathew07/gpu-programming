@@ -347,18 +347,6 @@ int main(int argc, char **argv)
     ws.window_id = 0;
 
 
-    /*
-    ToDo
-
-
-
-
-
-
-
-
-    */
-
     for (int i = 0; i < S_count; ++i)
     {
         int source = sources[i];
